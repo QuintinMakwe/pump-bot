@@ -10,6 +10,8 @@ import { Queue } from 'bull';
 import { QUEUE } from '@src/constant';
 import { BullBoardAuthMiddleware } from '@src/middleware/bullboard-auth.middleware';
 import { RequestLogger } from './middleware/request-logger.middleware';
+import { json } from 'express';
+import { urlencoded } from 'express';
 
 async function bootstrap() {
   try {
@@ -18,6 +20,8 @@ async function bootstrap() {
 
     app.use(RequestLogger);
     app.useGlobalPipes(new ValidationPipe({whitelist: true}));
+    app.use(json({ limit: '100mb' }));
+    app.use(urlencoded({ extended: true, limit: '300mb' }));
 
     const monitoringQueue = app.get<Queue>(getQueueToken(QUEUE.TOKEN_MONITORING.name));
     const analyticsQueue = app.get<Queue>(getQueueToken(QUEUE.TOKEN_ANALYTICS.name));

@@ -17,8 +17,8 @@ export class TokenMetricsService {
     ) {}
 
     private async getSolPrice(): Promise<number> {
-        const CACHE_KEY = 'sol_price';
-        const CACHE_DURATION = 60; // 60 seconds
+        const CACHE_KEY = 'sol_price'; 
+        const CACHE_DURATION = 1800; // 30 minutes
 
         try {
             const cachedPrice = await this.redisService.get(CACHE_KEY);
