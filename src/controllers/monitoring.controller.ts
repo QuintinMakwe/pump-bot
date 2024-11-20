@@ -48,7 +48,6 @@ export class MonitoringController {
 
     @Post('stream')
     async handleQuicknodeStream(@Body() body: QuickNodeStreamData[][]) {
-        console.log('body length: ', body.length);
         
         const results = await Promise.all(
             body.map(async batch => {
