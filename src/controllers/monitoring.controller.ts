@@ -5,14 +5,15 @@ import { SlackNotificationService } from '@src/services/slack-notification.servi
 import { NotificationType } from '@src/types/notification.types';
 import { Utils } from '@src/services/util.service';
 import {  QuickNodeStreamData } from '@src/types/quicknode.types';
-import { isQuickNodeStreamData } from '@src/guard/quicknode.guard';
+import {  QuickNodeGuard } from '@src/guard/quicknode.guard';
 
 @Controller('monitoring')
 export class MonitoringController {
     constructor(
         private blockchainService: BlockchainService,
         private slackNotificationService: SlackNotificationService,
-        private utils: Utils
+        private utils: Utils,
+        private quickNodeGuard: QuickNodeGuard
     ) {}
 
     @Post('start')
@@ -46,19 +47,25 @@ export class MonitoringController {
     }
 
     @Post('stream')
-    async handleQuicknodeStream(@Body() body: [QuickNodeStreamData[]]) {
-        if (body[0] !== null && !isQuickNodeStreamData(body[0])) {
-            console.error('Invalid stream data format:!!');
-            return { success: false, error: 'Invalid stream data format' };
-        }
-        console.log('Processing QuickNode stream data:');
-        const [err, data] = await this.utils.makeAsyncCall(
-            this.blockchainService.processQuicknodeStreamData(body[0])
+    async handleQuicknodeStream(@Body() body: QuickNodeStreamData[][]) {
+        console.log('body length: ', body.length);
+        
+        const results = await Promise.all(
+            body.map(async batch => {
+                if (!batch || !this.quickNodeGuard.isQuickNodeStreamData(batch)) {
+                    console.error('Invalid stream data format in batch');
+                    // await this.blockchainService.logInvalidData(batch);
+                    return { success: false, error: 'Invalid stream data format' };
+                }
+                return this.blockchainService.processQuicknodeStreamData(batch);
+            })
         );
 
-        if (err) {
-            console.error('Error processing QuickNode stream data:', err);
-            return { success: false, error: err?.message };
+        //@ts-ignore
+        const errors = results.filter(result => !result.success);
+        if (errors.length > 0) {
+            console.error('Errors processing QuickNode stream batches:', errors);
+            return { success: false, errors };
         }
 
         return { success: true };
