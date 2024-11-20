@@ -20,12 +20,10 @@ async function bootstrap() {
 
     app.use(RequestLogger);
     app.useGlobalPipes(new ValidationPipe({whitelist: true}));
-    app.use(json({ limit: '100mb' }));
+    app.use(json({ limit: '300mb' }));
     app.use(urlencoded({ extended: true, limit: '300mb' }));
 
     const monitoringQueue = app.get<Queue>(getQueueToken(QUEUE.TOKEN_MONITORING.name));
-    const analyticsQueue = app.get<Queue>(getQueueToken(QUEUE.TOKEN_ANALYTICS.name));
-    const notificationsQueue = app.get<Queue>(getQueueToken(QUEUE.NOTIFICATIONS.name));
 
 
     const serverAdapter = new ExpressAdapter();
@@ -34,8 +32,6 @@ async function bootstrap() {
     const bullBoard = createBullBoard({
       queues: [
         new BullAdapter(monitoringQueue),
-        new BullAdapter(analyticsQueue),
-        new BullAdapter(notificationsQueue)
       ],
       serverAdapter
     });

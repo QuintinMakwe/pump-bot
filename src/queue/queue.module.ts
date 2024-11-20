@@ -24,9 +24,7 @@ import { RedisModule } from '@src/redis/redis.module';
             inject: [ConfigService],
         }),
         BullModule.registerQueue(
-            { name: QUEUE.TOKEN_MONITORING.name },
-            { name: QUEUE.TOKEN_ANALYTICS.name },
-            { name: QUEUE.NOTIFICATIONS.name }
+            { name: QUEUE.TOKEN_MONITORING.name }
         ),
         RedisModule
     ],

@@ -17,8 +17,9 @@ import { TokenMetricsService } from '@src/services/token-metrics.service';
 import { BullModule } from '@nestjs/bull';
 import { ConfigService } from '@nestjs/config';
 import { RedisService } from '@src/redis/redis.service';
-import { QUEUE } from './constant';
-import { TokenService } from './services/token.service';
+import { QUEUE } from '@src/constant';
+import { TokenService } from '@src/services/token.service';
+import { QuickNodeGuard } from '@src/guard/quicknode.guard';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { TokenService } from './services/token.service';
         BULL_BOARD_ADMIN_USER: Joi.string().required(),
         BULL_BOARD_ADMIN_PASS: Joi.string().required(),
         WALLET_PRIVATE_KEY: Joi.string().required(),
+        STREAM_API_KEY: Joi.string().required(),
       }),
     }),
     RedisModule,
@@ -59,7 +61,8 @@ import { TokenService } from './services/token.service';
     ConfigService,
     RedisService,
     TokenMonitoringService, 
-    TokenService
+    TokenService, 
+    QuickNodeGuard
   ]
 })
 export class AppModule {}
