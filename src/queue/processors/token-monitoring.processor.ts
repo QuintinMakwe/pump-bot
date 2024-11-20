@@ -20,13 +20,13 @@ export class TokenMonitoringProcessor {
 
         // Check if we've exceeded monitoring duration
         if (elapsedTime >= this.tokenMonitoringService.INITIAL_MONITORING_DURATION * 1000) {
-            await job.remove();
+            await job.queue.removeRepeatableByKey(job.opts.repeat?.key);
             return;
         }
 
         const meetsConditions = await this.tokenMonitoringService.checkEntryConditions(mint);
         if (meetsConditions) {
-            await job.remove(); // Stop initial monitoring
+            await job.queue.removeRepeatableByKey(job.opts.repeat?.key);
             await this.tokenMonitoringService.startPositionMonitoring(mint);
         }
     }
@@ -43,13 +43,13 @@ export class TokenMonitoringProcessor {
                 timestamp: Date.now(),
                 data: { message: 'Position monitoring duration exceeded - Consider closing position' }
             });
-            await job.remove();
+            await job.queue.removeRepeatableByKey(job.opts.repeat?.key);
             return;
         }
 
         const shouldExit = await this.tokenMonitoringService.checkExitConditions(mint, entryPrice);
         if (shouldExit) {
-            await job.remove();
+            await job.queue.removeRepeatableByKey(job.opts.repeat?.key);
         }
     }
 }

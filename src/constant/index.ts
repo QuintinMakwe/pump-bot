@@ -19,3 +19,4 @@ export const QUEUE = {
 }
 
 export const COINGECKO_SOL_PRICE_URL = 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd';
+export const STREAM_API_URL = 'https://api.quicknode.com';

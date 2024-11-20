@@ -21,6 +21,10 @@ export class SlackNotificationService {
                 return '📈';
             case NotificationType.EXIT_SIGNAL:
                 return '🚨';
+            case NotificationType.MONITORING_STOPPED:
+                return '🛑';
+            case NotificationType.MONITORING_STARTED:
+                return '📡';
             default:
                 return '🤷🏽‍♂️';
         }
@@ -30,7 +34,7 @@ export class SlackNotificationService {
         const emoji = this.getEmoji(payload.type);
         const header = `${emoji} *${payload.type}* ${emoji}`;
         const timestamp = new Date(payload.timestamp).toLocaleString();
-        
+
         let details = '';
         switch (payload.type) {
             case NotificationType.ENTRY_SIGNAL:
@@ -41,23 +45,34 @@ export class SlackNotificationService {
                 break;
         }
 
-        return `${header}\n*Mint:* \`${payload.mintAddress}\`\n*Time:* ${timestamp}\n${details}`;
+        return `${header}
+                Mint: \`${payload.mintAddress}\`
+                Time: ${timestamp}
+                ${details}`;
     }
 
     private formatNewTokenMessage(data: any): string {
-        return `*Entry Signal:*\n` +
-               `• Name: ${data.name}\n` +
-               `• Symbol: ${data.symbol}\n` +
-               `• Creator: \`${data.creator}\`` +
-               `• Mint: \`${data.mint}\``;
+        return `\`\`\`
+                Name: ${data.name}
+                Symbol: ${data.symbol}
+                Creator: ${data.creator}
+                Mint: ${data.mint}
+                Entry Price: ${data.entryPrice}
+                Message: ${data.message}
+                \`\`\``;
     }
 
     private formatExitSignalMessage(data: any): string {
-        return `*Exit Signal:*\n` +
-               `• Name: ${data.name}\n` +
-               `• Symbol: ${data.symbol}\n` +
-               `• Creator: \`${data.creator}\`` +
-               `• Mint: \`${data.mint}\``;
+        return `\`\`\`
+                Name: ${data.name}
+                Symbol: ${data.symbol}
+                Creator: ${data.creator}
+                Mint: ${data.mint}
+                Exit Price: ${data.exitPrice}
+                Price Change: ${data.priceChangePercent}%
+                Has Sell with High Impact: ${data.hasSellWithHighImpact}
+                Message: ${data.message}
+                \`\`\``;
     }
 
     async notify(payload: NotificationPayload): Promise<void> {

@@ -80,7 +80,7 @@ export class BlockchainService implements OnModuleInit {
                 const formattedEvent = this.formatCreateEvent(event.data);
                 console.log('Formatted CreateEvent:', formattedEvent);
                 await this.databaseService.storeCreateEvent(formattedEvent);
-                await this.tokenMonitoringService.startInitialMonitoring(formattedEvent);
+                // await this.tokenMonitoringService.startInitialMonitoring(formattedEvent);
             } else if (event.name === 'TradeEvent') {
                 const formattedEvent = await this.formatTradeEvent(event.data);
                 console.log('Formatted TradeEvent:', formattedEvent);
@@ -202,7 +202,6 @@ export class BlockchainService implements OnModuleInit {
         try {
             const mintInfo = await this.connection.getParsedAccountInfo(new PublicKey(mintAddress));
             // @ts-ignore
-            console.log('Mint info:', mintInfo.value?.data?.parsed?.info);
             if (!mintInfo.value?.data || typeof mintInfo.value.data !== 'object') {
                 return 9; // fallback to default SPL token decimals
             }
@@ -427,49 +426,93 @@ export class BlockchainService implements OnModuleInit {
         return this.wallet;
     }
 
-    async processQuicknodeStreamData(transactions: QuickNodeStreamData[]) {
-        for (const tx of transactions) {
-            // Check if this transaction involves pump.fun program
-            const pumpInvocation = tx.programInvocations?.find(
-                inv => inv.programId === this.PUMP_PROGRAM_ID.toString()
+    async processQuicknodeStreamData(transactions: QuickNodeStreamData[]): Promise<{ success: boolean, error?: string }> {
+        try {
+            const db = await this.databaseService.getDb();
+            
+            for (const tx of transactions) {
+                const pumpInvocation = tx.programInvocations?.find(
+                    inv => inv.programId === this.PUMP_PROGRAM_ID.toString()
+                );
+
+                if (!pumpInvocation) continue;
+                console.log('pump invocation found!!');
+                // Process all create events
+                const isCreateEvent = await this.isCreateInstruction(pumpInvocation.instruction.data);
+                if (isCreateEvent) {
+                    console.log('create event found!!');
+                    await this.processTransaction(tx, pumpInvocation);
+                    continue;
+                }
+
+                // For other events (buy/sell), check if we're tracking this token
+                const mintAddress = pumpInvocation.instruction.accounts[2].pubkey; // mint account is at index 2, reference pump.idl.ts
+                const createEvent = await db.collection('create_events').findOne({ mint: mintAddress });
+                
+                if (!createEvent) {
+                    console.log(`Skipping transaction for untracked token: ${mintAddress}`);
+                    continue;
+                }
+                console.log('processing buy/sell event');
+                await this.processTransaction(tx, pumpInvocation);
+            }
+            return { success: true };
+        } catch (error) {
+            console.error('Error processing transaction batch:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    private async isCreateInstruction(data: string): Promise<boolean> {
+        try {
+            const ixData = Buffer.from(bs58.decode(data));
+            const discriminator = ixData.slice(0, 8);
+            const createIxDiscriminator = Buffer.from(
+                createHash('sha256').update('global:create').digest().slice(0, 8)
+            );
+            return discriminator.equals(createIxDiscriminator);
+        } catch {
+            return false;
+        }
+    }
+
+    private async processTransaction(tx: QuickNodeStreamData, pumpInvocation: any) {
+        // Verify transaction status directly from Solana
+        const txStatus = await this.connection.getTransaction(tx.signature, {
+            maxSupportedTransactionVersion: 0
+        });
+
+        // Only proceed if the transaction was actually successful
+        if (!txStatus || txStatus.meta?.err !== null) return;
+
+        console.log('Confirmed successful pump invocation!');
+
+        // Decode from logs if available
+
+        if (tx.logs?.length) {
+            const programDataLog = tx.logs.find(log =>
+                log.startsWith('Program data:')
             );
 
-            pumpInvocation && console.log('pumpInvocation found!!!')
-
-            if (!pumpInvocation || !tx.success) continue;
-            // if (!pumpInvocation) continue;
-            console.log('successful pump invocation found !!')
-
-            try {
-                // Decode from logs if available
-                if (tx.logs?.length) {
-                    const programDataLog = tx.logs.find(log =>
-                        log.startsWith('Program data:')
-                    );
-
-                    if (programDataLog) {
-                        const base64Data = programDataLog.split('Program data: ')[1];
-                        const decodedEvent = this.eventCoder.decode(base64Data);
-                        console.log('decodedEvent: ', decodedEvent.name);
-                        await this.processDecodedEvent(decodedEvent, tx);
-                        continue;
-                    }
-                }
-
-                // If no logs or no program data found, decode from instruction data
-                const instructionData = pumpInvocation.instruction.data;
-                if (instructionData) {
-                    const decodedEvent = await this.decodeInstructionData(
-                        instructionData,
-                        pumpInvocation.instruction.accounts,
-                        tx.slot
-                    );
-                    console.log('decodedData: ', decodedEvent);
-                    await this.processDecodedEvent(decodedEvent, tx);
-                }
-            } catch (error) {
-                console.error('Error processing transaction:', tx.signature, error);
+            if (programDataLog) {
+                const base64Data = programDataLog.split('Program data: ')[1];
+                const decodedEvent = this.eventCoder.decode(base64Data);
+                console.log('decodedEvent: ', decodedEvent.name);
+                await this.processDecodedEvent(decodedEvent, tx);
+                return;
             }
+        }
+
+        // If no logs or no program data found, decode from instruction data
+        const instructionData = pumpInvocation.instruction.data;
+        if (instructionData) {
+            const decodedEvent = await this.decodeInstructionData(
+                instructionData,
+                pumpInvocation.instruction.accounts,
+                tx.slot
+            );
+            await this.processDecodedEvent(decodedEvent, tx);
+            console.log('decodedData: ', decodedEvent);
         }
     }
 
@@ -483,9 +526,9 @@ export class BlockchainService implements OnModuleInit {
                 slot: tx.slot,
                 blockTime: tx.blockTime
             };
-            console.log('Formatted CreateEvent:', formattedEvent);
+            // console.log('Formatted CreateEvent:', formattedEvent);
             await this.databaseService.storeCreateEvent(formattedEvent);
-            await this.tokenMonitoringService.startInitialMonitoring(formattedEvent);
+            // await this.tokenMonitoringService.startInitialMonitoring(formattedEvent);
         } else if (decodedEvent.name === 'TradeEvent') {
             const formattedEvent = {
                 ...(await this.formatTradeEvent(decodedEvent.data as unknown as TradeEvent)),
@@ -493,7 +536,7 @@ export class BlockchainService implements OnModuleInit {
                 slot: tx.slot,
                 blockTime: tx.blockTime
             };
-            console.log('Formatted TradeEvent:', formattedEvent);
+            // console.log('Formatted TradeEvent:', formattedEvent);
             await this.databaseService.storeTradeEvent(formattedEvent);
             await this.databaseService.updateTokenHolder(formattedEvent);
         }
@@ -516,19 +559,19 @@ export class BlockchainService implements OnModuleInit {
             } : null;
 
             if (!decoded) return null;
-            
+
             switch (decoded.name) {
                 case 'buy':
                     let buyOffset = 0;
                     const amount = new BN(decoded.data.slice(buyOffset, buyOffset + 8), 'le');
                     buyOffset += 8;
                     const maxSolCost = new BN(decoded.data.slice(buyOffset, buyOffset + 8), 'le');
-                    
+
                     const buyState = await this.getBondingCurveStateAtSlot(
                         accounts[3].pubkey,
-                        slot 
+                        slot
                     );
-                    
+
                     return this.createTradeEvent({
                         mint: accounts[2].pubkey,
                         solAmount: await this.calculateSolAmount(
@@ -549,12 +592,12 @@ export class BlockchainService implements OnModuleInit {
                     const sellAmount = new BN(decoded.data.slice(sellOffset, sellOffset + 8), 'le');
                     sellOffset += 8;
                     const minSolOutput = new BN(decoded.data.slice(sellOffset, sellOffset + 8), 'le');
-                    
+
                     const sellState = await this.getBondingCurveStateAtSlot(
                         accounts[3].pubkey,
                         slot
                     );
-                    
+
                     return this.createTradeEvent({
                         mint: accounts[2].pubkey, // mint account
                         solAmount: await this.calculateSolAmount(
@@ -575,18 +618,18 @@ export class BlockchainService implements OnModuleInit {
                     // Each string is prefixed with a u32 length
                     let offset = 0;
                     const strings = [];
-                    
+
                     for (let i = 0; i < 3; i++) {
                         // Read the length of the string (u32)
                         const length = decoded.data.readUInt32LE(offset);
                         offset += 4;
-                        
+
                         // Read the string data
                         const stringData = decoded.data.slice(offset, offset + length);
                         strings.push(stringData.toString('utf8'));
                         offset += length;
                     }
-                    
+
                     return {
                         name: 'CreateEvent',
                         data: {
@@ -602,14 +645,14 @@ export class BlockchainService implements OnModuleInit {
                 default:
                     return null;
             }
-        
+
         } catch (error) {
             console.error('Error decoding instruction data:', error);
             return null;
         }
     }
 
-    private async getVirtualSolReserves(bondingCurveAddress: string): Promise<BN> {
+    public async getVirtualSolReserves(bondingCurveAddress: string): Promise<BN> {
         const bondingCurve = await this.connection.getAccountInfo(new PublicKey(bondingCurveAddress));
         if (!bondingCurve) return new BN(0);
 
@@ -622,7 +665,7 @@ export class BlockchainService implements OnModuleInit {
         return new BN(decoded.virtualSolReserves.toString());
     }
 
-    private async getVirtualTokenReserves(bondingCurveAddress: string): Promise<BN> {
+    public async getVirtualTokenReserves(bondingCurveAddress: string): Promise<BN> {
         const bondingCurve = await this.connection.getAccountInfo(new PublicKey(bondingCurveAddress));
         if (!bondingCurve) return new BN(0);
 
@@ -651,32 +694,32 @@ export class BlockchainService implements OnModuleInit {
     }
 
     private async calculateTokenAmount(
-        solAmount: BN, 
+        solAmount: BN,
         bondingCurveAddress: string,
         preState?: { virtualSolReserves: BN, virtualTokenReserves: BN }
     ): Promise<BN> {
-        const { virtualSolReserves, virtualTokenReserves } = preState || 
+        const { virtualSolReserves, virtualTokenReserves } = preState ||
             await this.getBondingCurveStateAtSlot(bondingCurveAddress);
-        
+
         if (virtualSolReserves.isZero() || virtualTokenReserves.isZero()) {
             throw new Error('Virtual reserves cannot be zero');
         }
-    
+
         const deltaX = solAmount.abs();
         const x = virtualSolReserves;
         const y = virtualTokenReserves;
-        
+
         return y.mul(deltaX).div(x.add(deltaX)).abs();
     }
 
     private async calculateSolAmount(
-        tokenAmount: BN, 
+        tokenAmount: BN,
         bondingCurveAddress: string,
         preState?: { virtualSolReserves: BN, virtualTokenReserves: BN }
     ): Promise<BN> {
-        const { virtualSolReserves, virtualTokenReserves } = preState || 
+        const { virtualSolReserves, virtualTokenReserves } = preState ||
             await this.getBondingCurveStateAtSlot(bondingCurveAddress);
-        
+
         if (virtualSolReserves.isZero() || virtualTokenReserves.isZero()) {
             throw new Error('Virtual reserves cannot be zero');
         }
@@ -685,11 +728,11 @@ export class BlockchainService implements OnModuleInit {
         const deltaY = tokenAmount.abs();
         const x = virtualSolReserves;
         const y = virtualTokenReserves;
-        
+
         if (deltaY.gte(y)) {
             throw new Error('Token amount exceeds available reserves');
         }
-        
+
         return x.mul(deltaY).div(y.sub(deltaY)).abs();
     }
 
@@ -729,4 +772,23 @@ export class BlockchainService implements OnModuleInit {
             };
         }
     }
+
+    public async logInvalidData(data: any): Promise<void> {
+        try {
+            const fs = require('fs');
+            const path = require('path');
+            const logPath = path.join(process.cwd(), 'test.json');
+            
+            const logEntry = JSON.stringify({
+                timestamp: new Date().toISOString(),
+                data: data
+            }, null, 2);
+
+            fs.appendFileSync(logPath, logEntry + '\n');
+        } catch (error) {
+            console.error('Error logging invalid data:', error);
+        }
+    }
+
+    
 }

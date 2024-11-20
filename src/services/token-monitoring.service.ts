@@ -47,6 +47,12 @@ export class TokenMonitoringService {
             metrics.transactionCount.buys : 
             metrics.transactionCount.buys / metrics.transactionCount.sells;
         const hasHealthyBuySellRatio = buyToSellRatio >= 3;
+
+        const buySellVolumeRatio = metrics.transactionCount.sellVolume === 0 ? 
+            metrics.transactionCount.buyVolume : 
+            metrics.transactionCount.buyVolume / metrics.transactionCount.sellVolume;
+
+        const hasHealthyBuySellVolumeRatio = buySellVolumeRatio >= 3;
         
         // 3. Market cap between $6k-$8k
         const hasValidMarketCap = metrics.marketCapUSD >= 6000 && metrics.marketCapUSD <= 8000;
@@ -62,8 +68,8 @@ export class TokenMonitoringService {
         const hasHealthyDistribution = topHoldersPercentage <= 20;
         
         // 7. Holder to volume ratio check
-        // Assuming $100 average position size as healthy
-        const expectedMinHolders = Math.floor(metrics.volumeUSD / 100);
+        // Assuming $10 average position size as healthy
+        const expectedMinHolders = Math.floor(metrics.volumeUSD / 10);
         const actualHolders = metrics.totalHolders;
         const hasHealthyHolderCount = actualHolders >= expectedMinHolders;
 
@@ -83,17 +89,24 @@ export class TokenMonitoringService {
             hasHealthyDistribution,
             expectedMinHolders,
             actualHolders,
-            hasHealthyHolderCount
+            hasHealthyHolderCount,
+            buySellVolumeRatio,
+            hasHealthyBuySellVolumeRatio
         });
 
+        // return (
+        //     hasMinimumBuys &&
+        //     hasHealthyBuySellRatio &&
+        //     hasValidMarketCap &&
+        //     hasMinimumVolume &&
+        //     isNewToken &&
+        //     hasHealthyDistribution &&
+        //     hasHealthyHolderCount &&
+        //     hasHealthyBuySellVolumeRatio
+        // );
         return (
             hasMinimumBuys &&
-            hasHealthyBuySellRatio &&
-            hasValidMarketCap &&
-            hasMinimumVolume &&
-            isNewToken &&
-            hasHealthyDistribution &&
-            hasHealthyHolderCount
+            hasHealthyBuySellRatio
         );
     }
 
@@ -119,7 +132,11 @@ export class TokenMonitoringService {
             timestamp: Date.now(),
             data: { 
                 message: 'Entry conditions met - Consider entering position',
-                entryPrice: metrics.currentPrice
+                entryPrice: metrics.currentPrice, 
+                mint: mintAddress,
+                creator: metrics.tokenInfo.creator,
+                symbol: metrics.tokenInfo.symbol,
+                name: metrics.tokenInfo.name
             }
         });
     }
@@ -147,6 +164,12 @@ export class TokenMonitoringService {
         // Exit conditions
         const hasReachedProfitTarget = priceChangePercent >= 45;
         const hasReachedStopLoss = priceChangePercent <= -20;
+
+        console.log('Exit condition check: ', {
+            hasReachedProfitTarget,
+            hasReachedStopLoss,
+            hasSellWithHighImpact
+        })
         
         if (hasReachedProfitTarget || hasReachedStopLoss || hasSellWithHighImpact) {
             await this.slackNotificationService.notify({
@@ -159,10 +182,13 @@ export class TokenMonitoringService {
                         hasReachedStopLoss ? ' Stop loss triggered.' :
                         ' Large sell detected.'
                     }`,
-                    entryPrice,
-                    currentPrice: metrics.currentPrice,
+                    exitPrice: metrics.currentPrice,
                     priceChangePercent,
-                    hasSellWithHighImpact
+                    hasSellWithHighImpact, 
+                    mint: mintAddress,
+                    creator: metrics.tokenInfo.creator,
+                    symbol: metrics.tokenInfo.symbol,
+                    name: metrics.tokenInfo.name
                 }
             });
         }

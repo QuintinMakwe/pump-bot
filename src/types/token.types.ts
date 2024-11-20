@@ -48,7 +48,7 @@ export enum TokenMonitoringStage {
 }
 
 export interface TokenMetrics {
-    transactionCount: { buys: number; sells: number };
+    transactionCount: { buys: number; sells: number, buyVolume: number, sellVolume: number };
     devHoldingPercentage: number;
     marketCapUSD: number;
     ageInSeconds: number;
@@ -56,6 +56,7 @@ export interface TokenMetrics {
     topHolders: { address: string; percentage: number }[];
     currentPrice: number;
     totalHolders: number;
+    tokenInfo: CreateEvent & {creator: string}
 }
 
 export interface TokenState {
@@ -107,4 +108,12 @@ export interface PositionData {
     entryPrice: number;
     stage: TokenMonitoringStage;
     attempts: number;
+}
+
+export interface BondingCurveState {
+    virtualTokenReserves: BN;
+    virtualSolReserves: BN;
+    realTokenReserves: BN;
+    realSolReserves: BN;
+    tokenTotalSupply: BN;
 }
