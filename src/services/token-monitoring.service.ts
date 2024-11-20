@@ -94,20 +94,20 @@ export class TokenMonitoringService {
             hasHealthyBuySellVolumeRatio
         });
 
-        // return (
-        //     hasMinimumBuys &&
-        //     hasHealthyBuySellRatio &&
-        //     hasValidMarketCap &&
-        //     hasMinimumVolume &&
-        //     isNewToken &&
-        //     hasHealthyDistribution &&
-        //     hasHealthyHolderCount &&
-        //     hasHealthyBuySellVolumeRatio
-        // );
         return (
             hasMinimumBuys &&
-            hasHealthyBuySellRatio
+            hasHealthyBuySellRatio &&
+            hasValidMarketCap &&
+            hasMinimumVolume &&
+            isNewToken &&
+            hasHealthyDistribution &&
+            hasHealthyHolderCount &&
+            hasHealthyBuySellVolumeRatio
         );
+        // return (
+        //     hasMinimumBuys &&
+        //     hasHealthyBuySellRatio
+        // );
     }
 
     async startPositionMonitoring(mintAddress: string) {
