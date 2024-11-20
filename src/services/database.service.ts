@@ -21,7 +21,6 @@ export class DatabaseService implements OnModuleInit {
             await this.client.connect();
             this.db = this.client.db(this.configService.get('MONGODB_DB_NAME'));
             
-            // Create time series collections if they don't exist
             await this.setupTimeSeriesCollections();
             
             console.log('Connected to MongoDB');

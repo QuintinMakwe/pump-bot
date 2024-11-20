@@ -72,7 +72,6 @@ export class QuickNodeGuard {
                 data: data
             }, null, 2);
 
-            // Append to file with newline
             fs.appendFileSync(logPath, logEntry + '\n');
         } catch (error) {
             console.error('Error logging invalid data:', error);

@@ -203,18 +203,18 @@ export class BlockchainService implements OnModuleInit {
             const mintInfo = await this.connection.getParsedAccountInfo(new PublicKey(mintAddress));
             // @ts-ignore
             if (!mintInfo.value?.data || typeof mintInfo.value.data !== 'object') {
-                return 9; // fallback to default SPL token decimals
+                return 9;
             }
             return (mintInfo.value.data as any).parsed.info.decimals;
         } catch (error) {
             console.error(`Error fetching decimals for token ${mintAddress}:`, error);
-            return 9; // fallback to default SPL token decimals
+            return 9;
         }
     }
 
     private async formatTradeEvent(event: TradeEvent): Promise<FormattedTradeEvent> {
         const decimals = await this.getTokenDecimals(event.mint.toBase58());
-        const solAmount = event.solAmount.toNumber() / 1e9; // SOL always has 9 decimals
+        const solAmount = event.solAmount.toNumber() / 1e9; 
         const tokenAmount = event.tokenAmount.toNumber() / Math.pow(10, decimals);
         const virtualSolReserves = event.virtualSolReserves.toNumber() / 1e9;
         const virtualTokenReserves = event.virtualTokenReserves.toNumber() / Math.pow(10, decimals);
@@ -477,17 +477,14 @@ export class BlockchainService implements OnModuleInit {
     }
 
     private async processTransaction(tx: QuickNodeStreamData, pumpInvocation: any) {
-        // Verify transaction status directly from Solana
         const txStatus = await this.connection.getTransaction(tx.signature, {
             maxSupportedTransactionVersion: 0
         });
 
-        // Only proceed if the transaction was actually successful
         if (!txStatus || txStatus.meta?.err !== null) return;
 
         console.log('Confirmed successful pump invocation!');
 
-        // Decode from logs if available
 
         if (tx.logs?.length) {
             const programDataLog = tx.logs.find(log =>
