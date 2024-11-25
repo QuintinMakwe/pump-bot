@@ -20,6 +20,7 @@ import { RedisService } from '@src/redis/redis.service';
 import { QUEUE } from '@src/constant';
 import { TokenService } from '@src/services/token.service';
 import { QuickNodeGuard } from '@src/guard/quicknode.guard';
+import { ConnectionManagerService } from './services/connection-manager.service';
 
 @Module({
   imports: [
@@ -62,7 +63,8 @@ import { QuickNodeGuard } from '@src/guard/quicknode.guard';
     RedisService,
     TokenMonitoringService, 
     TokenService, 
-    QuickNodeGuard
+    QuickNodeGuard, 
+    ConnectionManagerService
   ]
 })
 export class AppModule {}

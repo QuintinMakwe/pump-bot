@@ -9,48 +9,153 @@ import { DatabaseService } from './database.service';
 import { FormattedTradeEvent, FormattedCreateEvent, TradeEvent, CreateEvent } from '@src/types/token.types';
 import { TokenMonitoringService } from '@src/services/token-monitoring.service';
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from '@solana/spl-token';
-import { Program, AnchorProvider } from '@coral-xyz/anchor';
-import { SYSVAR_RENT_PUBKEY } from '@solana/web3.js';
+import { Program } from '@coral-xyz/anchor';
 import { BN } from '@coral-xyz/anchor';
 import { AccountBalance, QuickNodeStreamData } from '@src/types/quicknode.types';
 import { createHash } from 'crypto';
+import { ConnectionManagerService } from './connection-manager.service';
+import { RPConnection } from '@src/types/connection.types';
 
 @Injectable()
 export class BlockchainService implements OnModuleInit {
-    private connection: Connection;
-    private wallet: Keypair;
     private eventCoder: BorshEventCoder;
     private readonly PUMP_PROGRAM_ID: PublicKey;
     private monitoringSubscription: number | null = null;
     private isMonitoring: boolean = false;
     private readonly REDIS_MONITORING_KEY = 'monitoring:status';
     private program: Program;
+    private currentConnection: RPConnection | null = null;
+    private wallet: Keypair;
 
     constructor(
         private configService: ConfigService,
         private databaseService: DatabaseService,
         private redisService: RedisService,
-        private tokenMonitoringService: TokenMonitoringService
+        private tokenMonitoringService: TokenMonitoringService,
+        private connectionManager: ConnectionManagerService
     ) {
-        this.connection = new Connection(
-            this.configService.get('SOLANA_RPC_URL'),
-            'confirmed'
-        );
-
-
         const privateKeyString = this.configService.get('WALLET_PRIVATE_KEY');
 
         const privateKeyUint8 = bs58.decode(privateKeyString);
         this.wallet = Keypair.fromSecretKey(privateKeyUint8);
-
         this.PUMP_PROGRAM_ID = new PublicKey(this.configService.get('PUMP_PROGRAM_ID'));
         this.eventCoder = new BorshEventCoder(IDL as any);
+        this.updateConnection();
+    }
 
+    private updateConnection() {
+        this.currentConnection = this.connectionManager.getNextHealthyConnection();
         this.program = new Program(
             IDL as any,
             this.PUMP_PROGRAM_ID,
-            { connection: this.connection }
+            { connection: this.currentConnection.connection }
         );
+    }
+
+    private async restartMonitoring() {
+        console.log('Restarting monitoring due to connection issues...');
+        
+        if (this.monitoringSubscription !== null && this.currentConnection) {
+            try {
+                await this.currentConnection.connection.removeAccountChangeListener(
+                    this.monitoringSubscription
+                );
+            } catch (error) {
+                console.error('Error removing old subscription:', error);
+            }
+        }
+
+        this.monitoringSubscription = null;
+        this.isMonitoring = false;
+        this.updateConnection();
+        await this.startMonitoring();
+    }
+
+    async startMonitoring(): Promise<boolean> {
+        if (this.isMonitoring) return false;
+
+        try {
+            if (!this.currentConnection) {
+                this.updateConnection();
+            }
+
+            this.monitoringSubscription = await this.monitorProgram(async (event) => {
+                if (event.name === 'CreateEvent') {
+                    const formattedEvent = this.formatCreateEvent(event.data);
+                    await this.databaseService.storeCreateEvent(formattedEvent);
+                    // await this.tokenMonitoringService.startInitialMonitoring(formattedEvent);
+                } else if (event.name === 'TradeEvent') {
+                    const formattedEvent = await this.formatTradeEvent(event.data);
+                    await this.databaseService.storeTradeEvent(formattedEvent);
+                    await this.databaseService.updateTokenHolder(formattedEvent);
+                }
+            });
+
+            this.isMonitoring = true;
+            await this.updateMonitoringState();
+            return true;
+        } catch (error) {
+            console.error('Error in startMonitoring:', error);
+            await this.restartMonitoring();
+            return false;
+        }
+    }
+
+    private async monitorProgram(callback: (event: any) => Promise<void>): Promise<number> {
+        if (!this.currentConnection) throw new Error('No active connection');
+
+        try {
+            if (this.connectionManager.isNearRateLimit(this.currentConnection.id)) {
+                await this.restartMonitoring();
+                return;
+            }
+
+            const subscription = this.currentConnection.connection.onLogs(
+                this.PUMP_PROGRAM_ID,
+                async (logs) => {
+                    if (logs.err) {
+                        console.error('Error in logs subscription:', logs.err);
+                        await this.restartMonitoring();
+                        return;
+                    }
+
+                    try {
+                        await this.connectionManager.handleRequest(this.currentConnection.id);
+
+                        for (const log of logs.logs) {
+                            if (!log.startsWith('Program data:')) continue;
+                            const base64Data = log.split('Program data: ')[1];
+                            const event = this.eventCoder.decode(base64Data);
+                            if (!event) continue;
+                            await callback(event);
+                        }
+
+                        if (this.connectionManager.isNearRateLimit(this.currentConnection.id)) {
+                            await this.restartMonitoring();
+                        }
+                    } catch (error) {
+                        console.error('Error processing log:', error);
+                        await this.restartMonitoring();
+                    }
+                },
+                'confirmed'
+            );
+
+            return subscription;
+        } catch (error) {
+            console.error('Error in monitorProgram:', error);
+            await this.restartMonitoring();
+            throw error;
+        }
+    }
+
+    private async updateMonitoringState() {
+        await this.redisService.set(this.REDIS_MONITORING_KEY, JSON.stringify({
+            isMonitoring: this.isMonitoring,
+            subscriptionId: this.monitoringSubscription,
+            lastUpdated: Date.now(),
+            currentConnectionId: this.currentConnection?.id
+        }));
     }
 
     async onModuleInit() {
@@ -72,34 +177,6 @@ export class BlockchainService implements OnModuleInit {
         }
     }
 
-    async startMonitoring(): Promise<boolean> {
-        if (this.isMonitoring) return false;
-
-        this.monitoringSubscription = await this.monitorProgram(async (event) => {
-            if (event.name === 'CreateEvent') {
-                const formattedEvent = this.formatCreateEvent(event.data);
-                console.log('Formatted CreateEvent:', formattedEvent);
-                await this.databaseService.storeCreateEvent(formattedEvent);
-                // await this.tokenMonitoringService.startInitialMonitoring(formattedEvent);
-            } else if (event.name === 'TradeEvent') {
-                const formattedEvent = await this.formatTradeEvent(event.data);
-                console.log('Formatted TradeEvent:', formattedEvent);
-                await this.databaseService.storeTradeEvent(formattedEvent);
-                await this.databaseService.updateTokenHolder(formattedEvent);
-            }
-        });
-
-        this.isMonitoring = true;
-
-        await this.redisService.set(this.REDIS_MONITORING_KEY, JSON.stringify({
-            isMonitoring: true,
-            subscriptionId: this.monitoringSubscription,
-            lastUpdated: Date.now()
-        }));
-
-        return true;
-    }
-
     async stopMonitoring(): Promise<boolean> {
         const storedState = await this.redisService.get(this.REDIS_MONITORING_KEY);
         if (!storedState) return false;
@@ -108,7 +185,7 @@ export class BlockchainService implements OnModuleInit {
         if (subscriptionId === null || subscriptionId === undefined) return false;
 
         try {
-            await this.connection.removeOnLogsListener(subscriptionId);
+            await this.currentConnection.connection.removeOnLogsListener(subscriptionId);
             this.monitoringSubscription = null;
             this.isMonitoring = false;
 
@@ -144,63 +221,32 @@ export class BlockchainService implements OnModuleInit {
 
     private async validateConnection() {
         try {
-            const blockHeight = await this.connection.getBlockHeight();
+            if (!this.currentConnection || 
+                this.connectionManager.isNearRateLimit(this.currentConnection.id)) {
+                this.updateConnection();
+            }
+            const blockHeight = await this.currentConnection.connection.getBlockHeight();
+            await this.connectionManager.handleRequest(this.currentConnection.id);
             console.log(`Connected to Solana network. Block height 🧱: ${blockHeight}`);
+            
+            // If we're near rate limit, proactively switch
+            if (this.connectionManager.isNearRateLimit(this.currentConnection.id)) {
+                this.updateConnection();
+            }
         } catch (error) {
-            console.error('Failed to connect to Solana network:', error);
+            console.error('Connection validation failed:', error);
+            this.updateConnection(); // Switch on error
             throw error;
         }
     }
 
-    async monitorProgram(callback: (event: any) => Promise<void>) {
-        const filters = [
-            {
-                memcmp: {
-                    offset: 0,
-                    bytes: bs58.encode(Buffer.from(eventDiscriminator('CreateEvent')))
-                }
-            },
-            {
-                memcmp: {
-                    offset: 0,
-                    bytes: bs58.encode(Buffer.from(eventDiscriminator('TradeEvent')))
-                }
-            }
-        ]
-
-        return this.connection.onLogs(
-            this.PUMP_PROGRAM_ID,
-            async (logs) => {
-                if (logs.err) return;
-
-                try {
-                    const programDataLog = logs.logs.find(log =>
-                        log.startsWith('Program data:')
-                    );
-
-                    if (!programDataLog) return;
-
-                    const base64Data = programDataLog.split('Program data: ')[1];
-                    const decodedEvent = this.eventCoder.decode(base64Data);
-
-                    if (decodedEvent) {
-                        await callback(decodedEvent);
-                    }
-                } catch (error) {
-                    console.error('Error processing program log:', error);
-                }
-            },
-            'confirmed'
-        );
-    }
-
     getConnection(): Connection {
-        return this.connection;
+        return this.currentConnection?.connection;
     }
 
     private async getTokenDecimals(mintAddress: string): Promise<number> {
         try {
-            const mintInfo = await this.connection.getParsedAccountInfo(new PublicKey(mintAddress));
+            const mintInfo = await this.currentConnection.connection.getParsedAccountInfo(new PublicKey(mintAddress));
             // @ts-ignore
             if (!mintInfo.value?.data || typeof mintInfo.value.data !== 'object') {
                 return 9;
@@ -266,7 +312,7 @@ export class BlockchainService implements OnModuleInit {
 
     async getTokenSupply(mintAddress: string): Promise<number> {
         try {
-            const mintInfo = await this.connection.getParsedAccountInfo(new PublicKey(mintAddress));
+            const mintInfo = await this.currentConnection.connection.getParsedAccountInfo(new PublicKey(mintAddress));
             if (!mintInfo.value?.data || typeof mintInfo.value.data !== 'object') {
                 throw new Error('Invalid mint account data');
             }
@@ -322,7 +368,7 @@ export class BlockchainService implements OnModuleInit {
                 new Program(
                     IDL as any,
                     this.PUMP_PROGRAM_ID,
-                    { connection: this.connection }
+                    { connection: this.currentConnection.connection }
                 ).instruction.buy(
                     new BN(solAmount * LAMPORTS_PER_SOL),
                     {
@@ -342,7 +388,7 @@ export class BlockchainService implements OnModuleInit {
             );
 
             const signature = await sendAndConfirmTransaction(
-                this.connection,
+                this.currentConnection.connection,
                 tx,
                 [this.wallet]
             );
@@ -391,7 +437,7 @@ export class BlockchainService implements OnModuleInit {
                 new Program(
                     IDL as any,
                     this.PUMP_PROGRAM_ID,
-                    { connection: this.connection }
+                    { connection: this.currentConnection.connection }
                 ).instruction.sell(
                     new BN(tokenAmount),
                     {
@@ -410,7 +456,7 @@ export class BlockchainService implements OnModuleInit {
             );
 
             const signature = await sendAndConfirmTransaction(
-                this.connection,
+                this.currentConnection.connection,
                 tx,
                 [this.wallet]
             );
@@ -477,39 +523,53 @@ export class BlockchainService implements OnModuleInit {
     }
 
     private async processTransaction(tx: QuickNodeStreamData, pumpInvocation: any) {
-        const txStatus = await this.connection.getTransaction(tx.signature, {
-            maxSupportedTransactionVersion: 0
-        });
+        let retries = 0;
+        const MAX_RETRIES = 3;
+    
+        while (retries < MAX_RETRIES) {
+            try {
+                const connection = this.connectionManager.getNextHealthyConnection();
+                const txStatus = await connection.connection.getTransaction(tx.signature, {
+                    maxSupportedTransactionVersion: 0
+                });
 
-        if (!txStatus || txStatus.meta?.err !== null) return;
-
-        console.log('Confirmed successful pump invocation!');
-
-
-        if (tx.logs?.length) {
-            const programDataLog = tx.logs.find(log =>
-                log.startsWith('Program data:')
-            );
-
-            if (programDataLog) {
-                const base64Data = programDataLog.split('Program data: ')[1];
-                const decodedEvent = this.eventCoder.decode(base64Data);
-                console.log('decodedEvent: ', decodedEvent.name);
-                await this.processDecodedEvent(decodedEvent, tx);
+                await this.connectionManager.handleRequest(connection.id);
+    
+                if (!txStatus || txStatus.meta?.err !== null) return;
+    
+                if (tx.logs?.length) {
+                    const programDataLog = tx.logs.find(log =>
+                        log.startsWith('Program data:')
+                    );
+    
+                    if (programDataLog) {
+                        const base64Data = programDataLog.split('Program data: ')[1];
+                        const decodedEvent = this.eventCoder.decode(base64Data);
+                        await this.processDecodedEvent(decodedEvent, tx);
+                        return;
+                    }
+                }
+    
+                // Fallback to instruction data decoding
+                const instructionData = pumpInvocation.instruction.data;
+                if (instructionData) {
+                    const decodedEvent = await this.decodeInstructionData(
+                        instructionData,
+                        pumpInvocation.instruction.accounts,
+                        tx.slot
+                    );
+                    await this.processDecodedEvent(decodedEvent, tx);
+                }
                 return;
+            } catch (error) {
+                console.error(`Error processing transaction (attempt ${retries + 1}):`, error);
+                retries++;
+                this.updateConnection();
+                
+                if (retries === MAX_RETRIES) {
+                    throw error;
+                }
             }
-        }
-
-        // If no logs or no program data found, decode from instruction data
-        const instructionData = pumpInvocation.instruction.data;
-        if (instructionData) {
-            const decodedEvent = await this.decodeInstructionData(
-                instructionData,
-                pumpInvocation.instruction.accounts,
-                tx.slot
-            );
-            await this.processDecodedEvent(decodedEvent, tx);
-            console.log('decodedData: ', decodedEvent);
         }
     }
 
@@ -650,7 +710,14 @@ export class BlockchainService implements OnModuleInit {
     }
 
     public async getVirtualSolReserves(bondingCurveAddress: string): Promise<BN> {
-        const bondingCurve = await this.connection.getAccountInfo(new PublicKey(bondingCurveAddress));
+        if (!this.currentConnection || 
+            this.connectionManager.isNearRateLimit(this.currentConnection.id)) {
+            this.updateConnection();
+        }
+        
+        const bondingCurve = await this.currentConnection.connection.getAccountInfo(new PublicKey(bondingCurveAddress));
+        await this.connectionManager.handleRequest(this.currentConnection.id);
+        
         if (!bondingCurve) return new BN(0);
 
         // Decode the bonding curve account data using the IDL structure
@@ -663,7 +730,12 @@ export class BlockchainService implements OnModuleInit {
     }
 
     public async getVirtualTokenReserves(bondingCurveAddress: string): Promise<BN> {
-        const bondingCurve = await this.connection.getAccountInfo(new PublicKey(bondingCurveAddress));
+        if (!this.currentConnection || 
+            this.connectionManager.isNearRateLimit(this.currentConnection.id)) {
+            this.updateConnection();
+        }
+        const bondingCurve = await this.currentConnection.connection.getAccountInfo(new PublicKey(bondingCurveAddress));
+        await this.connectionManager.handleRequest(this.currentConnection.id);
         if (!bondingCurve) return new BN(0);
 
         const decoded = this.program.coder.accounts.decode(
@@ -737,36 +809,53 @@ export class BlockchainService implements OnModuleInit {
         bondingCurveAddress: string,
         slot?: number
     ): Promise<{ virtualSolReserves: BN, virtualTokenReserves: BN }> {
-        try {
-            const options = slot ? {
-                commitment: 'confirmed' as Commitment,
-                minContextSlot: slot - 1 // Get state just before this transaction
-            } : { commitment: 'confirmed' as Commitment };
+        let retries = 0;
+        const MAX_RETRIES = 3;
 
-            const bondingCurveAccountInfo = await this.connection.getAccountInfoAndContext(
-                new PublicKey(bondingCurveAddress),
-                options
-            );
+        while (retries < MAX_RETRIES) {
+            try {
+                if (!this.currentConnection || 
+                    this.connectionManager.isNearRateLimit(this.currentConnection.id)) {
+                    this.updateConnection();
+                }
 
-            if (!bondingCurveAccountInfo.value) {
-                throw new Error('No bonding curve account info found');
+                const options = slot ? {
+                    commitment: 'confirmed' as Commitment,
+                    minContextSlot: slot - 1
+                } : { commitment: 'confirmed' as Commitment };
+
+                const bondingCurveAccountInfo = await this.currentConnection.connection.getAccountInfoAndContext(
+                    new PublicKey(bondingCurveAddress),
+                    options
+                );
+
+                await this.connectionManager.handleRequest(this.currentConnection.id);
+                
+                if (!bondingCurveAccountInfo.value) {
+                    throw new Error('No bonding curve account info found');
+                }
+
+                const decoded = this.program.coder.accounts.decode(
+                    'BondingCurve',
+                    bondingCurveAccountInfo.value.data
+                );
+
+                return {
+                    virtualSolReserves: new BN(decoded.virtualSolReserves.toString()),
+                    virtualTokenReserves: new BN(decoded.virtualTokenReserves.toString())
+                };
+            } catch (error) {
+                console.error(`Error getting bonding curve state (attempt ${retries + 1}):`, error);
+                retries++;
+                this.updateConnection();
+                
+                if (retries === MAX_RETRIES) {
+                    return {
+                        virtualSolReserves: new BN(0),
+                        virtualTokenReserves: new BN(0)
+                    };
+                }
             }
-
-            const decoded = this.program.coder.accounts.decode(
-                'BondingCurve',
-                bondingCurveAccountInfo.value.data
-            );
-
-            return {
-                virtualSolReserves: new BN(decoded.virtualSolReserves.toString()),
-                virtualTokenReserves: new BN(decoded.virtualTokenReserves.toString())
-            };
-        } catch (error) {
-            console.error('Error getting bonding curve state:', error);
-            return {
-                virtualSolReserves: new BN(0),
-                virtualTokenReserves: new BN(0)
-            };
         }
     }
 
