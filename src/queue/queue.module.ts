@@ -10,6 +10,7 @@ import { DatabaseService } from '@src/services/database.service';
 import { Utils } from '@src/services/util.service';
 import { TokenService } from '@src/services/token.service';
 import { RedisModule } from '@src/redis/redis.module';
+import { ConnectionManagerService } from '@src/services/connection-manager.service';
 
 @Module({
     imports: [
@@ -36,7 +37,8 @@ import { RedisModule } from '@src/redis/redis.module';
         DatabaseService,
         Utils,
         ConfigService, 
-        TokenService
+        TokenService,
+        ConnectionManagerService
     ],
     exports: [
         BullModule, 

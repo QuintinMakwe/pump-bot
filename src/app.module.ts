@@ -21,6 +21,7 @@ import { QUEUE } from '@src/constant';
 import { TokenService } from '@src/services/token.service';
 import { QuickNodeGuard } from '@src/guard/quicknode.guard';
 import { ConnectionManagerService } from './services/connection-manager.service';
+import { LoggingService } from './services/logging.service';
 
 @Module({
   imports: [
@@ -42,6 +43,8 @@ import { ConnectionManagerService } from './services/connection-manager.service'
         BULL_BOARD_ADMIN_PASS: Joi.string().required(),
         WALLET_PRIVATE_KEY: Joi.string().required(),
         STREAM_API_KEY: Joi.string().required(),
+        QUICKNODE_RPC_URL_1: Joi.string().required(),
+        QUICKNODE_RPC_URL_2: Joi.string().required(),
       }),
     }),
     RedisModule,
@@ -64,7 +67,8 @@ import { ConnectionManagerService } from './services/connection-manager.service'
     TokenMonitoringService, 
     TokenService, 
     QuickNodeGuard, 
-    ConnectionManagerService
+    ConnectionManagerService,
+    LoggingService
   ]
 })
 export class AppModule {}

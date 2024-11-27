@@ -8,15 +8,25 @@ import { TokenService } from '@src/services/token.service';
 import { RedisService } from '@src/redis/redis.service';
 import { BN } from '@coral-xyz/anchor';
 import { PublicKey } from '@solana/web3.js';
+import { RPConnection } from '@src/types/connection.types';
+import { ConnectionManagerService } from '@src/services/connection-manager.service';
 
 @Injectable()
 export class TokenMetricsService {
+    private currentConnection: RPConnection | null = null;
     constructor(
         private databaseService: DatabaseService,
         private utils: Utils,
         private tokenService: TokenService,
-        private redisService: RedisService
-    ) { }
+        private redisService: RedisService,
+        private connectionManager: ConnectionManagerService 
+    ) {
+        this.updateConnection();
+     }
+
+    private updateConnection() {
+        this.currentConnection = this.connectionManager.getNextHealthyConnection();
+    }
 
     private async getSolPrice(): Promise<number> {
         const CACHE_KEY = 'sol_price';

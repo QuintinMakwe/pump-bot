@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { ConsoleLogger, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Connection } from "@solana/web3.js";
 import { ConnectionProvider, ConnectionStatus, RPConnection } from "@src/types/connection.types";
@@ -15,7 +15,7 @@ export class ConnectionManagerService {
 
     private initializeConnections() {
         // Initialize QuickNode connections
-        for (let i = 1; i <= 9; i++) {
+        for (let i = 1; i <= 2; i++) {
             const connection = new Connection(
                 this.configService.get(`QUICKNODE_RPC_URL_${i}`),
                 'confirmed'
@@ -38,6 +38,7 @@ export class ConnectionManagerService {
             this.configService.get('ANKR_RPC_URL'),
             'confirmed'
         );
+
         // Initialize Ankr connection
         this.connections.push({
             id: 'ankr-1',

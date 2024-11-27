@@ -15,6 +15,7 @@ import { AccountBalance, QuickNodeStreamData } from '@src/types/quicknode.types'
 import { createHash } from 'crypto';
 import { ConnectionManagerService } from './connection-manager.service';
 import { RPConnection } from '@src/types/connection.types';
+import { LoggingService } from './logging.service';
 
 @Injectable()
 export class BlockchainService implements OnModuleInit {
@@ -32,7 +33,8 @@ export class BlockchainService implements OnModuleInit {
         private databaseService: DatabaseService,
         private redisService: RedisService,
         private tokenMonitoringService: TokenMonitoringService,
-        private connectionManager: ConnectionManagerService
+        private connectionManager: ConnectionManagerService,
+        private loggingService: LoggingService
     ) {
         const privateKeyString = this.configService.get('WALLET_PRIVATE_KEY');
 
@@ -54,6 +56,7 @@ export class BlockchainService implements OnModuleInit {
 
     private async restartMonitoring() {
         console.log('Restarting monitoring due to connection issues...');
+        this.loggingService.log('INFO', 'Restarting monitoring due to connection issues...');
         
         if (this.monitoringSubscription !== null && this.currentConnection) {
             try {
@@ -62,6 +65,7 @@ export class BlockchainService implements OnModuleInit {
                 );
             } catch (error) {
                 console.error('Error removing old subscription:', error);
+                this.loggingService.log('ERROR', 'Error removing old subscription', { error });
             }
         }
 
@@ -106,6 +110,7 @@ export class BlockchainService implements OnModuleInit {
 
         try {
             if (this.connectionManager.isNearRateLimit(this.currentConnection.id)) {
+                this.loggingService.log("INFO", "near rate limit, restarting monitoring");
                 await this.restartMonitoring();
                 return;
             }
@@ -120,6 +125,8 @@ export class BlockchainService implements OnModuleInit {
                     }
 
                     try {
+                        console.log('about to handle request ', this.connectionManager.getCurrentConnection(this.currentConnection.id))
+                        this.loggingService.log('INFO', 'about to handle request', this.connectionManager.getCurrentConnection(this.currentConnection.id));
                         await this.connectionManager.handleRequest(this.currentConnection.id);
 
                         for (const log of logs.logs) {
@@ -131,10 +138,13 @@ export class BlockchainService implements OnModuleInit {
                         }
 
                         if (this.connectionManager.isNearRateLimit(this.currentConnection.id)) {
+                            console.log('near rate limit, restarting monitoring ', this.currentConnection)
+                            this.loggingService.log('INFO', 'near rate limit, restarting monitoring');
                             await this.restartMonitoring();
                         }
                     } catch (error) {
                         console.error('Error processing log:', error);
+                        this.loggingService.log('ERROR', 'Error processing log', { connectionId: this.currentConnection.id });
                         await this.restartMonitoring();
                     }
                 },
@@ -228,6 +238,7 @@ export class BlockchainService implements OnModuleInit {
             const blockHeight = await this.currentConnection.connection.getBlockHeight();
             await this.connectionManager.handleRequest(this.currentConnection.id);
             console.log(`Connected to Solana network. Block height 🧱: ${blockHeight}`);
+            this.loggingService.log('INFO', 'Connected to Solana network', { blockHeight });
             
             // If we're near rate limit, proactively switch
             if (this.connectionManager.isNearRateLimit(this.currentConnection.id)) {
@@ -235,6 +246,7 @@ export class BlockchainService implements OnModuleInit {
             }
         } catch (error) {
             console.error('Connection validation failed:', error);
+            this.loggingService.log('ERROR', 'Connection validation failed', { error });
             this.updateConnection(); // Switch on error
             throw error;
         }
@@ -247,6 +259,7 @@ export class BlockchainService implements OnModuleInit {
     private async getTokenDecimals(mintAddress: string): Promise<number> {
         try {
             const mintInfo = await this.currentConnection.connection.getParsedAccountInfo(new PublicKey(mintAddress));
+            await this.connectionManager.handleRequest(this.currentConnection.id);
             // @ts-ignore
             if (!mintInfo.value?.data || typeof mintInfo.value.data !== 'object') {
                 return 9;
@@ -313,6 +326,7 @@ export class BlockchainService implements OnModuleInit {
     async getTokenSupply(mintAddress: string): Promise<number> {
         try {
             const mintInfo = await this.currentConnection.connection.getParsedAccountInfo(new PublicKey(mintAddress));
+            await this.connectionManager.handleRequest(this.currentConnection.id);
             if (!mintInfo.value?.data || typeof mintInfo.value.data !== 'object') {
                 throw new Error('Invalid mint account data');
             }
@@ -393,6 +407,8 @@ export class BlockchainService implements OnModuleInit {
                 [this.wallet]
             );
 
+            await this.connectionManager.handleRequest(this.currentConnection.id);
+
             return signature;
         } catch (error) {
             console.error('Error buying token:', error);
@@ -461,6 +477,8 @@ export class BlockchainService implements OnModuleInit {
                 [this.wallet]
             );
 
+            await this.connectionManager.handleRequest(this.currentConnection.id);
+
             return signature;
         } catch (error) {
             console.error('Error selling token:', error);
@@ -528,12 +546,11 @@ export class BlockchainService implements OnModuleInit {
     
         while (retries < MAX_RETRIES) {
             try {
-                const connection = this.connectionManager.getNextHealthyConnection();
-                const txStatus = await connection.connection.getTransaction(tx.signature, {
+                const txStatus = await this.currentConnection.connection.getTransaction(tx.signature, {
                     maxSupportedTransactionVersion: 0
                 });
 
-                await this.connectionManager.handleRequest(connection.id);
+                await this.connectionManager.handleRequest(this.currentConnection.id);
     
                 if (!txStatus || txStatus.meta?.err !== null) return;
     
@@ -606,7 +623,7 @@ export class BlockchainService implements OnModuleInit {
             const discriminator = ixData.slice(0, 8);
             const instruction = IDL.instructions.find(ix => {
                 const ixDiscriminator = Buffer.from(
-                    createHash('sha256').update(`global:${ix.name}`).digest().slice(0, 8) //Ref: tis is how anchor gens discriminator
+                    createHash('sha256').update(`global:${ix.name}`).digest().slice(0, 8) //Ref: this is how anchor gens discriminator
                 );
                 return ixDiscriminator.equals(discriminator);
             });
